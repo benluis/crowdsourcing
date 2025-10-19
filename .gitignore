@@ -2,3 +2,5 @@ processing/results
 analysis/results
 original/
 processing/OneDrive_1_07-08-2025.zip
+analysis/final_with_deberta_ai_score_20251003_151656.pkl
+analysis/intermediate_with_text_quality_and_ai.parquet
