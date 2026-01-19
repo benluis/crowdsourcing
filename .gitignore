@@ -47,5 +47,12 @@ scripts/hpc/*.out
 .DS_Store
 Thumbs.db
 
+# --- VS Code ---
+.vs/
+.vs/crowdsourcing.slnx/
+.vs/crowdsourcing.slnx/v18/
+.vs/crowdsourcing.slnx/v18/DocumentLayout.json
+.vs/crowdsourcing.slnx/v18/DocumentGroupContainers.json
+.vs/crowdsourcing.slnx/v18/DocumentGroupContainers.json
 # --- Exceptions (Optional: Keep example data if needed) ---
 # !data/raw/example.csv
