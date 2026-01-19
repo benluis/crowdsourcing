@@ -1,0 +1,16 @@
+pandas
+numpy
+scikit-learn
+torch
+transformers
+accelerate
+datasets
+fsspec
+huggingface_hub
+tqdm
+openpyxl
+rpy2
+matplotlib
+seaborn
+requests
+beautifulsoup4

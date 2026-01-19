@@ -1,6 +1,51 @@
-processing/results
-analysis/results
-original/
-processing/OneDrive_1_07-08-2025.zip
-analysis/final_with_deberta_ai_score_20251003_151656.pkl
-analysis/intermediate_with_text_quality_and_ai.parquet
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+venv/
+env/
+.venv/
+.ipynb_checkpoints/
+
+# --- R ---
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+# --- Data (Large Files) ---
+data/raw/*
+data/processed/*
+data/dictionaries/*
+*.csv
+*.tsv
+*.parquet
+*.pkl
+*.pickle
+*.zip
+*.tar.gz
+*.xlsx
+*.xls
+
+# --- Models ---
+models/
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.h5
+
+# --- HPC / Logs ---
+*.out
+*.log
+slurm-*
+scripts/hpc/*.out
+
+# --- OS Specific ---
+.DS_Store
+Thumbs.db
+
+# --- Exceptions (Optional: Keep example data if needed) ---
+# !data/raw/example.csv
