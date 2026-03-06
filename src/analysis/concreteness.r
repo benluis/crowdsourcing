@@ -18,7 +18,7 @@ handlers(global = TRUE)
 
 # -------- 1) Load & prep Concreteness dictionary --------
 # Path updated to root folder as requested
-dict_path <- "C:/Users/Ben/Documents/GitHub/crowdsourcing/Paetzold_2016.xlsx"
+dict_path <- "C:/Users/Ben/Documents/GitHub/crowdsourcing/data/dictionaries/Paetzold_2016.xlsx"
 
 cat("Loading Dictionary from:", dict_path, "...\n")
 
@@ -31,7 +31,7 @@ concreteness <- read_xlsx(dict_path, sheet = "Bootstrapped_Psycholinguistic_F") 
   mutate(Word = str_to_lower(Word))
 
 # -------- 2) Load Your Data --------
-data_path <- "C:/Users/Ben/Documents/GitHub/crowdsourcing/analysis/mediation_analysis_data.csv"
+data_path <- "C:/Users/Ben/Documents/GitHub/crowdsourcing/data/processed/final_with_sentence_ai_scores_20260126_123413.csv"
 cat("Loading Data from:", data_path, "...\n")
 
 df <- read.csv(data_path)
