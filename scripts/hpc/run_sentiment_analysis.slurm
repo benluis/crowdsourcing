@@ -40,7 +40,7 @@ python -m nltk.downloader subjectivity vader_lexicon punkt
 # 3. RUN THE PYTHON SCRIPT
 echo "--- Starting Analysis Script ---"
 # Assume the job is submitted from the root of the cloned repo
-cd $SLURM_SUBMIT_DIR
+cd /work/users/b/e/benluis/crowdsourcing
 
 # Accept input path (file or directory) from command line argument
 # Defaults to "data/scraped" directory if not provided
@@ -49,6 +49,6 @@ INPUT_PATH=${1:-"data/scraped"}
 echo "Processing path: $INPUT_PATH"
 
 # Run the analysis script
-python src/analysis/analyze_kickstarter_comments.py "$INPUT_PATH"
+python analyze_kickstarter_comments.py "$INPUT_PATH"
 
 echo "--- Analysis Finished Successfully ---"
