@@ -1,25 +1,49 @@
+"""
+Analysis pipeline for Kickstarter updates.
+- Loads from scraper batch files (or rescrapes failed projects)
+- Runs sentiment + text quality + AI detection (sentence-by-sentence) on updates only
+- Saves in batches to data/analysis/, merges to all_updates_analyzed.csv at end
+- Checkpoint Option A + failures CSV
+"""
+
 import os
 import sys
 import pandas as pd
-import time
 import logging
 import glob
-from datetime import datetime
+import numpy as np
 
-# Add source directories to path so we can import your existing tools
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
+try:
+    import nltk
+    try:
+        nltk.data.find('tokenizers/punkt')
+        nltk.data.find('tokenizers/punkt_tab')
+    except LookupError:
+        nltk.download('punkt')
+        nltk.download('punkt_tab')
+except Exception:
+    pass
 
 try:
     from scrapers.scrape_updates import KickstarterUpdatesScraper
     from analysis.analyze_kickstarter_comments import KickstarterSentimentAnalyzer
-    from processing.ai_text_detection import AITextDetector
-    from processing.text_quality_analysis import simple_text_quality
+    from modeling.deberta_detector import DeBERTaDetector
+    from processing.text_quality_analysis import grammar_quality
+    import language_tool_python
+    from pipelines.pipeline_helpers import (
+        load_project_ids_with_data_from_summary,
+        load_processed_ids_from_checkpoint,
+        append_to_checkpoint,
+        record_failure,
+        merge_batch_files,
+    )
 except ImportError as e:
     logging.error(f"Import Error: {e}")
-    logging.error("Make sure you are running this from the project root or src/pipelines folder.")
+    logging.error("Make sure you are running this from the project root.")
     sys.exit(1)
 
-# Setup Logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -29,105 +53,213 @@ logging.basicConfig(
     ]
 )
 
-def main():
-    # 1. CONFIGURATION
-    INPUT_CSV = "data/kickstarter_projects.csv"
-    OUTPUT_DIR = "data/analyzed_updates"
-    
-    if not os.path.exists(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
+INPUT_CSV = "data/my_file.csv"  # No fallback. Input row 'id' = project id. Output row 'id' = update post id.
+OUTPUT_DIR = "data/analysis"
+SCRAPED_UPDATES_DIR = "data/scraped_updates_only"
+BATCH_SIZE_PROJECTS = 50
 
-    # 2. LOAD RESOURCES
-    logging.info("Loading models (this takes a moment)...")
+
+def _ai_scores_sentence_level(ai_detector, text: str) -> dict:
+    """
+    Split text into sentences, run DeBERTa on each, return aggregates.
+    Returns dict with ai_scores_sentences, ai_sentences, ai_score_mean, ai_score_median, ai_score_max.
+    """
+    if not text or not isinstance(text, str) or not text.strip():
+        return {
+            'ai_scores_sentences': [],
+            'ai_sentences': [],
+            'ai_score_mean': 0.0,
+            'ai_score_median': 0.0,
+            'ai_score_max': 0.0,
+        }
+    try:
+        sentences = nltk.sent_tokenize(text)
+    except LookupError:
+        try:
+            nltk.download('punkt_tab')
+            sentences = nltk.sent_tokenize(text)
+        except Exception:
+            sentences = [s.strip() for s in text.split('.') if s.strip()]
+    sentences = [s for s in sentences if len(s.strip()) > 5]
+    if not sentences:
+        return {
+            'ai_scores_sentences': [],
+            'ai_sentences': [],
+            'ai_score_mean': 0.0,
+            'ai_score_median': 0.0,
+            'ai_score_max': 0.0,
+        }
+    scores = ai_detector.predict_batch(sentences)
+    arr = np.array(scores)
+    return {
+        'ai_scores_sentences': list(scores),
+        'ai_sentences': sentences,
+        'ai_score_mean': float(np.mean(arr)) if len(arr) else 0.0,
+        'ai_score_median': float(np.median(arr)) if len(arr) else 0.0,
+        'ai_score_max': float(np.max(arr)) if len(arr) else 0.0,
+    }
+
+
+def load_updates_for_project(project_id: str, scraped_dir: str) -> list:
+    """
+    Load updates from kickstarter_updates_full batch files.
+    Aggregate across all files, dedupe by id.
+    """
+    updates = []
+    batch_files = glob.glob(os.path.join(scraped_dir, "kickstarter_updates_full*.csv"))
+    seen_ids = set()
+    for f in batch_files:
+        try:
+            loaded_df = pd.read_csv(f)
+            if 'project_id' not in loaded_df.columns:
+                continue
+            subset = loaded_df[loaded_df['project_id'].astype(str) == project_id]
+            if len(subset) == 0:
+                continue
+            for _, r in subset.iterrows():
+                rec = r.to_dict()
+                uid = rec.get('id')
+                if uid is not None and uid in seen_ids:
+                    continue
+                if uid is not None:
+                    seen_ids.add(uid)
+                updates.append(rec)
+        except Exception as e:
+            logging.warning(f"Failed to read {f}: {e}")
+    if updates:
+        logging.info(f"Loaded {len(updates)} updates for {project_id} from batch files")
+    return updates
+
+
+def main():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    logging.info("Loading models (DeBERTa may take a moment on GPU)...")
     try:
         scraper = KickstarterUpdatesScraper()
         sent_analyzer = KickstarterSentimentAnalyzer()
-        ai_detector = AITextDetector()
+        ai_detector = DeBERTaDetector()
+        tool = language_tool_python.LanguageTool('en-US')
     except Exception as e:
         logging.error(f"Failed to initialize models: {e}")
         return
 
-    # 3. LOAD PROJECT LIST
+    # Input: data/my_file.csv only (no fallback)
     if not os.path.exists(INPUT_CSV):
-        logging.error(f"Input CSV not found at {INPUT_CSV}")
-        # Fallback: try to find any CSV in data/raw or data
-        csv_files = glob.glob("data/*.csv") + glob.glob("data/raw/*.csv")
-        if csv_files:
-            INPUT_CSV = csv_files[0]
-            logging.info(f"Falling back to {INPUT_CSV}")
-        else:
-            return
+        logging.error(f"Input CSV not found: {INPUT_CSV}. Create data/my_file.csv with columns: id, project_url (or url, combined.url)")
+        return
+    input_csv = INPUT_CSV
 
-    df = pd.read_csv(INPUT_CSV)
-    
-    # Find the URL column
-    url_col = next((col for col in ['project_url', 'url', 'combined.url'] if col in df.columns), None)
+    df = pd.read_csv(input_csv)
+    url_col = next((c for c in ['project_url', 'url', 'combined.url'] if c in df.columns), None)
     if not url_col:
-        logging.error("No URL column found in input CSV.")
+        logging.error("No URL column found.")
         return
 
-    logging.info(f"Loaded {len(df)} projects to process from {INPUT_CSV}")
+    df = df[df[url_col].astype(str).str.contains("kickstarter.com", case=False, na=False)]
+    logging.info(f"Loaded {len(df)} Kickstarter projects from {input_csv}")
 
-    # 4. PROCESS LOOP
+    projects_with_data = load_project_ids_with_data_from_summary(
+        SCRAPED_UPDATES_DIR, "kickstarter_updates_summary_batch_*.csv", "updates_count"
+    )
+    processed_ids = load_processed_ids_from_checkpoint(
+        os.path.join(OUTPUT_DIR, "updates_processed_ids.txt")
+    )
+    failures_path = os.path.join(OUTPUT_DIR, "updates_failures.csv")
+
+    buffer = []
+    batch_index = 0
+    projects_in_buffer = []
+
     for index, row in df.iterrows():
         project_id = str(row.get('id', 'unknown'))
-        project_url = row.get(url_col)
-        
-        # --- CHECKPOINT: Skip if already done ---
-        output_file = os.path.join(OUTPUT_DIR, f"{project_id}_updates.csv")
-        if os.path.exists(output_file):
-            continue  # Skip silently to keep logs clean
-            
-        logging.info(f"Processing Updates for {project_id} ({index + 1}/{len(df)})")
+        project_url = row.get(url_col, '')
+
+        if project_id in processed_ids:
+            continue  # Already done; no failure record (would bloat on restarts)
+        if not project_url or not str(project_url).strip():
+            record_failure(failures_path, project_id, str(project_url)[:200], "skip", "Empty or missing project_url")
+            continue
+
+        logging.info(f"Processing updates {project_id} ({index + 1}/{len(df)})")
 
         try:
-            # A. SCRAPE
             updates = []
-            try:
-                # fetch_updates_with_body is the method in your updates scraper
-                for update in scraper.fetch_updates_with_body(project_url):
-                    updates.append(update)
-            except Exception as e:
-                logging.warning(f"Scrape error for {project_id}: {e}")
-            
+            if project_id in projects_with_data and os.path.exists(SCRAPED_UPDATES_DIR):
+                updates = load_updates_for_project(project_id, SCRAPED_UPDATES_DIR)
+
             if not updates:
-                logging.warning(f"No updates found for {project_id} (or scrape failed).")
-                # Save an empty file so we don't retry endlessly
-                pd.DataFrame({'status': ['no_updates'], 'project_id': [project_id]}).to_csv(output_file, index=False)
+                try:
+                    for u in scraper.fetch_updates_with_body(project_url):
+                        u['project_id'] = project_id
+                        updates.append(u)
+                except Exception as e:
+                    record_failure(failures_path, project_id, project_url, "scrape", str(e))
+                    logging.warning(f"Scrape failed for {project_id}: {e}")
+                    continue
+
+            if not updates:
+                record_failure(failures_path, project_id, project_url, "no_data", "No updates after load/scrape")
                 continue
 
-            # B. ANALYZE (In-Memory)
             analyzed_rows = []
             for update in updates:
-                text = update.get('body', '')
-                
-                # 1. Sentiment
+                text = update.get('body') or update.get('update_body') or update.get('post_body') or ''
+                if not isinstance(text, str):
+                    text = str(text) if text is not None else ''
                 sent_scores = sent_analyzer.analyze_text(text)
-                
-                # 2. AI Detection
-                ai_scores = ai_detector.calculate_ai_score(text)
-                
-                # 3. Text Quality (Simple version for speed)
-                quality_score = simple_text_quality(text)
-
-                # Merge all data
-                combined = {
+                q = grammar_quality(text, tool)
+                q = q if q is not None else 0.0
+                ai_dict = _ai_scores_sentence_level(ai_detector, text)
+                analyzed_rows.append({
                     **update,
                     **sent_scores,
-                    **ai_scores,
-                    'text_quality': quality_score,
-                    'project_status': row.get('state', 'unknown')
-                }
-                analyzed_rows.append(combined)
+                    'text_quality': q,
+                    'project_status': row.get('state', 'unknown'),
+                    **ai_dict,
+                })
 
-            # C. SAVE
-            result_df = pd.DataFrame(analyzed_rows)
-            result_df.to_csv(output_file, index=False)
-            logging.info(f"Saved {len(result_df)} analyzed updates for {project_id}")
+            for r in analyzed_rows:
+                buffer.append(r)
+            projects_in_buffer.append(project_id)
+
+            if len(projects_in_buffer) >= BATCH_SIZE_PROJECTS:
+                batch_index += 1
+                ts = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+                batch_path = os.path.join(OUTPUT_DIR, f"updates_batch_{batch_index}_{ts}.csv")
+                pd.DataFrame(buffer).to_csv(batch_path, index=False)
+                logging.info(f"Saved updates batch {batch_index} ({len(buffer)} rows)")
+                append_to_checkpoint(
+                    os.path.join(OUTPUT_DIR, "updates_processed_ids.txt"),
+                    projects_in_buffer,
+                    ensure_dir=False
+                )
+                buffer = []
+                projects_in_buffer = []
 
         except Exception as e:
-            logging.error(f"Failed project {project_id}: {e}")
-            # Optional: Save a 'failed' marker file if you want to skip retries
+            record_failure(failures_path, project_id, project_url, "analysis", str(e))
+            logging.error(f"Failed {project_id}: {e}")
+
+    if buffer:
+        batch_index += 1
+        ts = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+        batch_path = os.path.join(OUTPUT_DIR, f"updates_batch_{batch_index}_{ts}.csv")
+        pd.DataFrame(buffer).to_csv(batch_path, index=False)
+        append_to_checkpoint(
+            os.path.join(OUTPUT_DIR, "updates_processed_ids.txt"),
+            projects_in_buffer,
+            ensure_dir=False
+        )
+
+    # Dedupe by update 'id' (unique per update post), not project_id
+    merge_batch_files(
+        os.path.join(OUTPUT_DIR, "updates_batch_*.csv"),
+        os.path.join(OUTPUT_DIR, "all_updates_analyzed.csv"),
+        id_col='id'  # update post id from API; project_id is for grouping
+    )
+    logging.info("Updates pipeline complete.")
+
 
 if __name__ == "__main__":
     main()
