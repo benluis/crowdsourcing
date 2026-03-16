@@ -3,7 +3,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --time=168:00:00
+#SBATCH --time=6-00:00:00
 #SBATCH --partition=a100-gpu
 #SBATCH --gres=gpu:1
 #SBATCH --output=logs/robust_pipeline_%j.out
