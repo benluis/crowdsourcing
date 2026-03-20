@@ -18,16 +18,17 @@ module purge
 module add anaconda/2024.02
 
 # Ensure environment exists and install dependencies
-if ! conda info --envs | grep -q "ai-detect-sentences"; then
-    echo "Creating environment ai-detect-sentences..."
-    conda create -n ai-detect-sentences python=3.9 -y
-fi
-source activate ai-detect-sentences
-echo "Installing/updating dependencies (pandas, nltk, language_tool_python, etc.)..."
-pip install pandas nltk cloudscraper beautifulsoup4 requests language_tool_python transformers torch textstat
+echo "Installing uv for fast package management..."
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.cargo/bin:$PATH"
+
+echo "Adding all required dependencies to project and syncing..."
+# Scraping, analysis, and ML dependencies compiled from previous scripts
+uv add pandas numpy matplotlib seaborn nltk cloudscraper beautifulsoup4 requests language_tool_python transformers torch textstat scikit-learn accelerate sentencepiece tqdm protobuf pydantic selenium webdriver-manager
+uv sync
 
 # NLTK data for sentence tokenization
-python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True)"
+uv run python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True)"
 
 echo "--- STARTING ROBUST KICKSTARTER PIPELINE ---"
 echo "Date: $(date)"
@@ -44,13 +45,13 @@ mkdir -p data/analysis
 echo "----------------------------------------"
 echo "Starting Comments Pipeline..."
 echo "----------------------------------------"
-python src/pipelines/pipeline_comments.py
+uv run python src/pipelines/pipeline_comments.py
 
 # 2. Run Updates Pipeline (Load Existing or Scrape -> Analyze -> Save)
 echo "----------------------------------------"
 echo "Starting Updates Pipeline..."
 echo "----------------------------------------"
-python src/pipelines/pipeline_updates.py
+uv run python src/pipelines/pipeline_updates.py
 
 echo "----------------------------------------"
 echo "All Pipelines Complete."
