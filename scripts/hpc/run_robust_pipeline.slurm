@@ -16,6 +16,8 @@ set -e
 # Load modules
 module purge
 module add anaconda/2024.02
+# Need Java 17+ for language_tool_python
+module add java/17.0.2
 
 # Ensure environment exists and install dependencies
 echo "Installing uv for fast package management..."
