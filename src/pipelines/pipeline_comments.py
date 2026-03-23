@@ -15,7 +15,6 @@ import glob
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 try:
-    from scrapers.scrape_comments import KickstarterCommentsScraper
     from analysis.analyze_kickstarter_comments import KickstarterSentimentAnalyzer
     from processing.text_quality_analysis import grammar_quality
     import language_tool_python
@@ -87,7 +86,6 @@ def main():
 
     logging.info("Loading models...")
     try:
-        scraper = KickstarterCommentsScraper()
         sent_analyzer = KickstarterSentimentAnalyzer()
         tool = language_tool_python.LanguageTool('en-US')
     except Exception as e:
@@ -119,8 +117,19 @@ def main():
     buffer = []
     batch_index = 0
     projects_in_buffer = []
+    
+    # Time Tracking to exit before 6 days
+    import time
+    start_time = time.time()
+    MAX_RUNTIME_HOURS = 139  # ~5.8 days to be safe
 
     for index, row in df.iterrows():
+        
+        # Check if we should gracefully exit
+        if (time.time() - start_time) / 3600 > MAX_RUNTIME_HOURS:
+            logging.info("Approaching SLURM 6-day limits. Saving and exiting gracefully so work is safely checkpointed.")
+            break
+            
         project_id = str(row.get('id', 'unknown'))
         project_url = row.get(url_col, '')
 
@@ -138,17 +147,7 @@ def main():
                 comments = load_comments_for_project(project_id, SCRAPED_DIR)
 
             if not comments:
-                try:
-                    for c in scraper.fetch_comments(project_url):
-                        c['project_id'] = project_id
-                        comments.append(c)
-                except Exception as e:
-                    record_failure(failures_path, project_id, project_url, "scrape", str(e))
-                    logging.warning(f"Scrape failed for {project_id}: {e}")
-                    continue
-
-            if not comments:
-                record_failure(failures_path, project_id, project_url, "no_data", "No comments after load/scrape")
+                record_failure(failures_path, project_id, project_url, "no_data", "No comments found in scraped folder. Skipping scrape.")
                 continue
 
             analyzed_rows = []

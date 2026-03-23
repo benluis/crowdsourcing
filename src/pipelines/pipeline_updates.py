@@ -27,7 +27,6 @@ except Exception:
     pass
 
 try:
-    from scrapers.scrape_updates import KickstarterUpdatesScraper
     from analysis.analyze_kickstarter_comments import KickstarterSentimentAnalyzer
     from modeling.deberta_detector import DeBERTaDetector
     from processing.text_quality_analysis import grammar_quality
@@ -136,7 +135,6 @@ def main():
 
     logging.info("Loading models (DeBERTa may take a moment on GPU)...")
     try:
-        scraper = KickstarterUpdatesScraper()
         sent_analyzer = KickstarterSentimentAnalyzer()
         ai_detector = DeBERTaDetector()
         tool = language_tool_python.LanguageTool('en-US')
@@ -170,8 +168,19 @@ def main():
     buffer = []
     batch_index = 0
     projects_in_buffer = []
+    
+    # Time Tracking to exit before 6 days
+    import time
+    start_time = time.time()
+    MAX_RUNTIME_HOURS = 139  # ~5.8 days to be safe
 
     for index, row in df.iterrows():
+        
+        # Check if we should gracefully exit
+        if (time.time() - start_time) / 3600 > MAX_RUNTIME_HOURS:
+            logging.info("Approaching SLURM 6-day limits. Saving and exiting gracefully so work is safely checkpointed.")
+            break
+
         project_id = str(row.get('id', 'unknown'))
         project_url = row.get(url_col, '')
 
@@ -189,17 +198,7 @@ def main():
                 updates = load_updates_for_project(project_id, SCRAPED_UPDATES_DIR)
 
             if not updates:
-                try:
-                    for u in scraper.fetch_updates_with_body(project_url):
-                        u['project_id'] = project_id
-                        updates.append(u)
-                except Exception as e:
-                    record_failure(failures_path, project_id, project_url, "scrape", str(e))
-                    logging.warning(f"Scrape failed for {project_id}: {e}")
-                    continue
-
-            if not updates:
-                record_failure(failures_path, project_id, project_url, "no_data", "No updates after load/scrape")
+                record_failure(failures_path, project_id, project_url, "no_data", "No updates found in scraped folder. Skipping scrape.")
                 continue
 
             analyzed_rows = []
