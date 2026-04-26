@@ -56,3 +56,4 @@ Thumbs.db
 .vs/crowdsourcing.slnx/v18/DocumentGroupContainers.json
 # --- Exceptions (Optional: Keep example data if needed) ---
 # !data/raw/example.csv
+/data
