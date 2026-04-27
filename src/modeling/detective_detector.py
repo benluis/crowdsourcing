@@ -120,6 +120,7 @@ class DeTeCtiveDetector:
         self.k = int(k or os.getenv("DETECTIVE_K", "5"))
         self.embedding_dim = int(embedding_dim or os.getenv("DETECTIVE_EMBEDDING_DIM", "768"))
         self.ai_label = str(ai_label if ai_label is not None else os.getenv("DETECTIVE_AI_LABEL", "0"))
+        self.faiss_device = os.getenv("DETECTIVE_FAISS_DEVICE", "cpu").lower()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self._validate_paths()
@@ -127,7 +128,8 @@ class DeTeCtiveDetector:
 
         print(f"Loading DeTeCtive embedding model from: {self.model_path}")
         print(f"Loading DeTeCtive FAISS database from: {self.database_path}")
-        print(f"Using device: {self.device}")
+        print(f"Using embedding device: {self.device}")
+        print(f"Using FAISS device: {self.faiss_device}")
 
         self.model = TextEmbeddingModel(self.model_name).to(self.device)
         self.tokenizer = self.model.tokenizer
@@ -283,7 +285,11 @@ class DeTeCtiveDetector:
 
     def _load_index(self, database_path: str):
         index = self.faiss.read_index(os.path.join(database_path, "index.faiss"))
-        if self.device.type == "cuda" and hasattr(self.faiss, "index_cpu_to_all_gpus"):
+        if (
+            self.faiss_device == "gpu"
+            and self.device.type == "cuda"
+            and hasattr(self.faiss, "index_cpu_to_all_gpus")
+        ):
             index = self.faiss.index_cpu_to_all_gpus(index)
 
         with open(os.path.join(database_path, "index_meta.faiss"), "rb") as file:

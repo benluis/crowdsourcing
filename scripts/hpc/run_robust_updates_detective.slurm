@@ -30,11 +30,15 @@ cd "$PROJECT_ROOT" || exit 1
 : "${DETECTIVE_DATABASE_PATH:=$DETECTIVE_REPO/database/deepfake}"
 : "${DETECTIVE_MODEL_NAME:=princeton-nlp/unsup-simcse-roberta-base}"
 : "${DETECTIVE_K:=5}"
+# FAISS GPU is prone to CUBLAS assertion failures on this stack. Keep FAISS on
+# CPU while the embedding model still uses CUDA for sentence embeddings.
+: "${DETECTIVE_FAISS_DEVICE:=cpu}"
 export DETECTIVE_REPO
 export DETECTIVE_MODEL_PATH
 export DETECTIVE_DATABASE_PATH
 export DETECTIVE_MODEL_NAME
 export DETECTIVE_K
+export DETECTIVE_FAISS_DEVICE
 
 # Use a fixed conda environment instead of mutating the project pyproject on
 # every run. This keeps DeTeCtive's fragile numpy/faiss stack reproducible.
@@ -71,6 +75,7 @@ echo "DETECTIVE_MODEL_PATH: $DETECTIVE_MODEL_PATH"
 echo "DETECTIVE_DATABASE_PATH: $DETECTIVE_DATABASE_PATH"
 echo "DETECTIVE_MODEL_NAME: $DETECTIVE_MODEL_NAME"
 echo "DETECTIVE_K: $DETECTIVE_K"
+echo "DETECTIVE_FAISS_DEVICE: $DETECTIVE_FAISS_DEVICE"
 
 if [ ! -f "$DETECTIVE_MODEL_PATH" ]; then
   echo "ERROR: Missing DeTeCtive model checkpoint: $DETECTIVE_MODEL_PATH" >&2
