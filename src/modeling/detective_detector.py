@@ -107,11 +107,11 @@ class DeTeCtiveDetector:
     ):
         self.model_path = model_path or os.getenv(
             "DETECTIVE_MODEL_PATH",
-            "models/detective/Deepfake_best.pth",
+            "models/detective/DeTeCtive/Deepfake_best.pth",
         )
         self.database_path = database_path or os.getenv(
             "DETECTIVE_DATABASE_PATH",
-            "models/detective/database/deepfake",
+            "models/detective/DeTeCtive/database/deepfake",
         )
         self.model_name = model_name or os.getenv(
             "DETECTIVE_MODEL_NAME",
