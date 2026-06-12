@@ -3,7 +3,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --time=6-00:00:00
+#SBATCH --time=9-12:00:00
 #SBATCH --partition=a100-gpu
 #SBATCH --qos=gpu_access
 #SBATCH --gres=gpu:1
@@ -33,12 +33,17 @@ cd "$PROJECT_ROOT" || exit 1
 # FAISS GPU is prone to CUBLAS assertion failures on this stack. Keep FAISS on
 # CPU while the embedding model still uses CUDA for sentence embeddings.
 : "${DETECTIVE_FAISS_DEVICE:=cpu}"
+# Save frequently and exit before the 9.5-day SLURM wall time.
+: "${DETECTIVE_BATCH_SIZE_PROJECTS:=10}"
+: "${DETECTIVE_MAX_RUNTIME_HOURS:=222}"
 export DETECTIVE_REPO
 export DETECTIVE_MODEL_PATH
 export DETECTIVE_DATABASE_PATH
 export DETECTIVE_MODEL_NAME
 export DETECTIVE_K
 export DETECTIVE_FAISS_DEVICE
+export DETECTIVE_BATCH_SIZE_PROJECTS
+export DETECTIVE_MAX_RUNTIME_HOURS
 
 # Use a fixed conda environment instead of mutating the project pyproject on
 # every run. This keeps DeTeCtive's fragile numpy/faiss stack reproducible.
@@ -76,6 +81,8 @@ echo "DETECTIVE_DATABASE_PATH: $DETECTIVE_DATABASE_PATH"
 echo "DETECTIVE_MODEL_NAME: $DETECTIVE_MODEL_NAME"
 echo "DETECTIVE_K: $DETECTIVE_K"
 echo "DETECTIVE_FAISS_DEVICE: $DETECTIVE_FAISS_DEVICE"
+echo "DETECTIVE_BATCH_SIZE_PROJECTS: $DETECTIVE_BATCH_SIZE_PROJECTS"
+echo "DETECTIVE_MAX_RUNTIME_HOURS: $DETECTIVE_MAX_RUNTIME_HOURS"
 
 if [ ! -f "$DETECTIVE_MODEL_PATH" ]; then
   echo "ERROR: Missing DeTeCtive model checkpoint: $DETECTIVE_MODEL_PATH" >&2

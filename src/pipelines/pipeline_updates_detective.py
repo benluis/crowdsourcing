@@ -58,8 +58,8 @@ logging.basicConfig(
 INPUT_CSV = "data/my_file.csv"  # Input row 'id' = project id. Output row 'id' = update post id.
 OUTPUT_DIR = "data/analysis/detective"
 SCRAPED_UPDATES_DIR = "data/scraped_updates_only"
-BATCH_SIZE_PROJECTS = 50
-MAX_RUNTIME_HOURS = 139  # ~5.8 days to be safe under a 6-day SLURM limit.
+BATCH_SIZE_PROJECTS = int(os.getenv("DETECTIVE_BATCH_SIZE_PROJECTS", "10"))
+MAX_RUNTIME_HOURS = float(os.getenv("DETECTIVE_MAX_RUNTIME_HOURS", "222"))
 
 CHECKPOINT_PATH = os.path.join(OUTPUT_DIR, "updates_detective_processed_ids.txt")
 FAILURES_PATH = os.path.join(OUTPUT_DIR, "updates_detective_failures.csv")
@@ -200,6 +200,7 @@ def main():
                 "skip",
                 "Empty or missing project_url",
             )
+            append_to_checkpoint(CHECKPOINT_PATH, [project_id], ensure_dir=False)
             continue
 
         logging.info(f"Processing updates {project_id} ({index + 1}/{len(df)})")
@@ -217,6 +218,7 @@ def main():
                     "no_data",
                     "No updates found in scraped folder. Skipping scrape.",
                 )
+                append_to_checkpoint(CHECKPOINT_PATH, [project_id], ensure_dir=False)
                 continue
 
             analyzed_rows = []
