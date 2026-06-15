@@ -7,7 +7,12 @@ import cloudscraper
 import glob
 import subprocess
 import random
-import resource
+
+try:
+    import resource
+except ImportError:
+    resource = None
+
 from bs4 import BeautifulSoup
 from typing import List, Dict, Optional, Generator
 from datetime import datetime
@@ -507,14 +512,15 @@ def process_kickstarter_projects(csv_file_path):
             if processed_count % BATCH_SIZE == 0 or len(comments_buffer) > 50000:
                 save_batch(comments_buffer, failures_buffer, batch_summary_buffer, batch_index, output_dir)
                 
-                # Log System Health (Memory Usage)
-                try:
-                    mem_usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-                    # Linux: KB, macOS: Bytes. Assuming Linux (HPC) -> KB -> MB
-                    mem_mb = mem_usage / 1024
-                    logging.info(f"[SYSTEM] Memory Usage: {mem_mb:.2f} MB")
-                except:
-                    pass
+                # Log System Health (Memory Usage) - Unix only
+                if resource:
+                    try:
+                        mem_usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+                        # Linux: KB, macOS: Bytes. Assuming Linux (HPC) -> KB -> MB
+                        mem_mb = mem_usage / 1024
+                        logging.info(f"[SYSTEM] Memory Usage: {mem_mb:.2f} MB")
+                    except Exception:
+                        pass
 
                 # Clear buffers
                 comments_buffer = []
