@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4>=4.14.3",
     "cloudscraper>=1.2.71",
+    "curl-cffi>=0.15.0",
     "datasets>=4.8.4",
     "faiss-cpu>=1.13.2",
     "lightning>=2.6.1",

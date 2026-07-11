@@ -16,7 +16,6 @@ import sys
 import time
 from pathlib import Path
 
-import cloudscraper
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -31,6 +30,7 @@ from processing.sqlite_schema import (  # noqa: E402
     utc_now_iso,
 )
 from scrapers.nav_counts import parse_nav_counts_from_html  # noqa: E402
+from scrapers.ks_session import CloudflareBlockedError, create_kickstarter_session, fetch_page  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,21 +50,14 @@ def resolve_url_column(df: pd.DataFrame) -> str | None:
 
 class ProjectCountFetcher:
     def __init__(self):
-        self.scraper = cloudscraper.create_scraper()
-        self.scraper.headers.update(
-            {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-                ),
-                "Accept-Language": "en-US,en;q=0.9",
-            }
-        )
+        self.scraper, self._http_backend = create_kickstarter_session()
 
     def fetch_page_html(self, url: str, max_retries: int = 3) -> str | None:
         for attempt in range(max_retries):
             try:
-                response = self.scraper.get(url)
+                response = fetch_page(self.scraper, url, max_attempts=1)
+                if response is None:
+                    continue
                 if response.status_code == 429:
                     wait = 30 * (attempt + 1)
                     logging.warning("Rate limit on %s; sleeping %ss", url, wait)
@@ -74,6 +67,10 @@ class ProjectCountFetcher:
                     return response.text
                 logging.error("HTTP %s for %s", response.status_code, url)
                 return None
+            except CloudflareBlockedError as exc:
+                logging.error("Cloudflare blocked fetch for %s: %s", url, exc)
+                wait = 30 * (attempt + 1)
+                time.sleep(wait)
             except Exception as exc:
                 logging.error("Request failed for %s: %s", url, exc)
                 time.sleep(10 * (attempt + 1))

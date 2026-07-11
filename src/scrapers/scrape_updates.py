@@ -3,7 +3,6 @@ import sys
 import time
 import logging
 import pandas as pd
-import cloudscraper
 import glob
 import random
 
@@ -16,6 +15,13 @@ except ImportError:
 from bs4 import BeautifulSoup
 from typing import List, Dict, Optional, Generator
 from datetime import datetime
+
+from scrapers.ks_session import (
+    CloudflareBlockedError,
+    create_kickstarter_session,
+    fetch_page,
+    get_csrf_token,
+)
 
 # Set up logging
 logging.basicConfig(
@@ -30,12 +36,7 @@ class KickstarterUpdatesScraper:
     CSRF_SOURCE_URL = "https://www.kickstarter.com"
 
     def __init__(self):
-        # Create a CloudScraper instance to handle Cloudflare challenges
-        self.scraper = cloudscraper.create_scraper()
-        self.scraper.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
-        })
+        self.scraper, self._http_backend = create_kickstarter_session()
         self.graph_url = "https://www.kickstarter.com/graph"
         self.requests_made = 0
         self.reset_interval = 100  # Increased from 20 to reduce session churn
@@ -45,22 +46,18 @@ class KickstarterUpdatesScraper:
 
     def reset_session(self):
         logging.info("Resetting scraper session (clearing cookies)...")
-        self.scraper = cloudscraper.create_scraper()
-        self.scraper.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
-        })
+        self.scraper, self._http_backend = create_kickstarter_session()
 
         if self.current_project_url:
             logging.info(f"Re-fetching CSRF token for {self.current_project_url} after session reset...")
-            csrf_token = self._get_csrf_token(self.current_project_url)
-            if csrf_token:
+            try:
+                csrf_token = get_csrf_token(self.scraper, self.current_project_url)
                 self.scraper.headers.update({
                     'x-csrf-token': csrf_token,
                     'content-type': 'application/json'
                 })
-            else:
-                logging.error("Failed to refresh CSRF token after session reset.")
+            except (CloudflareBlockedError, Exception) as exc:
+                logging.error("Failed to refresh CSRF token after session reset: %s", exc)
 
     def _extract_slug(self, url: str) -> str:
         try:
@@ -139,53 +136,22 @@ class KickstarterUpdatesScraper:
         return None
 
     def _parse_csrf_from_html(self, html: str) -> Optional[str]:
-        soup = BeautifulSoup(html, 'html.parser')
-        meta = soup.find('meta', {'name': 'csrf-token'})
-        return meta.get('content') if meta else None
+        from scrapers.ks_session import parse_csrf_from_html
+        return parse_csrf_from_html(html)
 
     def _fetch_page_with_retries(self, url: str, max_attempts: int = 3):
-        for attempt in range(max_attempts):
-            try:
-                response = self.scraper.get(url)
-                if response.status_code == 429:
-                    wait = 10 * (attempt + 1)
-                    logging.warning(f"Rate limit (429) on page load for {url}. Sleeping {wait}s...")
-                    time.sleep(wait)
-                    continue
-                return response
-            except Exception as e:
-                logging.warning(f"Page load attempt {attempt + 1} failed for {url}: {e}")
-                time.sleep(5)
-        return None
+        try:
+            return fetch_page(self.scraper, url, max_attempts=max_attempts)
+        except CloudflareBlockedError:
+            raise
 
     def _get_csrf_token(self, url: str) -> Optional[str]:
-        """
-        Initialize session cookies and extract the CSRF token.
-        Kickstarter still serves the token via a meta tag on any page; project
-        pages that 404 or omit the tag fall back to the homepage.
-        """
-        urls_to_try = []
-        if url:
-            urls_to_try.append(url)
-        if self.CSRF_SOURCE_URL not in urls_to_try:
-            urls_to_try.append(self.CSRF_SOURCE_URL)
-
-        for fetch_url in urls_to_try:
-            response = self._fetch_page_with_retries(fetch_url)
-            if not response:
-                continue
-
-            if response.status_code != 200:
-                logging.warning(f"Got status {response.status_code} from {fetch_url}")
-
-            token = self._parse_csrf_from_html(response.text)
-            if token:
-                if fetch_url != url:
-                    logging.info(f"Using CSRF token from {fetch_url}")
-                return token
-
-        logging.error("Could not find CSRF token on project page or homepage.")
-        return None
+        try:
+            return get_csrf_token(self.scraper, url)
+        except CloudflareBlockedError:
+            raise
+        except Exception:
+            return None
 
     def fetch_updates_with_body(self, project_url: str) -> Generator[Dict, None, None]:
         slug = self._extract_slug(project_url)
@@ -194,9 +160,14 @@ class KickstarterUpdatesScraper:
 
         self.current_project_url = project_url
         logging.info(f"Starting updates scrape for: {slug}")
-        
-        csrf_token = self._get_csrf_token(project_url)
-        if not csrf_token:
+
+        try:
+            csrf_token = get_csrf_token(self.scraper, project_url)
+        except CloudflareBlockedError:
+            logging.error("Cloudflare blocked CSRF fetch for %s. Aborting.", slug)
+            raise
+        except Exception as exc:
+            logging.error("Failed to obtain CSRF token for %s: %s. Aborting.", slug, exc)
             return
 
         self.scraper.headers.update({

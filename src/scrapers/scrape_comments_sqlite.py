@@ -32,6 +32,7 @@ from processing.sqlite_schema import (  # noqa: E402
     utc_now_iso,
 )
 from scrapers.scrape_comments import KickstarterCommentsScraper  # noqa: E402
+from scrapers.ks_session import CloudflareBlockedError, CsrfTokenError  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,6 +41,7 @@ logging.basicConfig(
 
 DEFAULT_INPUT_CSV = "data/my_file.csv"
 MAX_RUNTIME_SECONDS = 9.8 * 24 * 3600
+MAX_CONSECUTIVE_BLOCKS = 3
 
 
 def resolve_url_column(df: pd.DataFrame) -> str | None:
@@ -65,7 +67,8 @@ def seed_projects_from_csv(conn, csv_path: str) -> None:
     conn.commit()
 
 
-def scrape_project(conn, scraper: KickstarterCommentsScraper, project_id: str, project_url: str) -> None:
+def scrape_project(conn, scraper: KickstarterCommentsScraper, project_id: str, project_url: str) -> bool:
+    """Scrape comments for one project. Returns False if blocked (existing rows kept)."""
     rows = []
     try:
         for comment in scraper.fetch_comments(project_url):
@@ -88,6 +91,25 @@ def scrape_project(conn, scraper: KickstarterCommentsScraper, project_id: str, p
         )
         conn.commit()
         logging.info("Project %s: stored %d comments", project_id, len(rows))
+        return True
+    except (CloudflareBlockedError, CsrfTokenError) as exc:
+        conn.rollback()
+        log_scrape_event(
+            conn,
+            project_id,
+            "comments",
+            "rescrape",
+            rows_fetched=0,
+            status="Blocked",
+            error_message=str(exc),
+        )
+        conn.commit()
+        logging.error(
+            "Blocked for project %s (%s); keeping existing comments",
+            project_id,
+            exc,
+        )
+        return False
     except Exception as exc:
         conn.rollback()
         log_scrape_event(
@@ -101,6 +123,7 @@ def scrape_project(conn, scraper: KickstarterCommentsScraper, project_id: str, p
         )
         conn.commit()
         logging.error("Failed project %s: %s", project_id, exc)
+        return True
 
 
 def main() -> None:
@@ -139,6 +162,7 @@ def main() -> None:
     logging.info("Comments scrape queue: %d projects", len(queue))
     scraper = KickstarterCommentsScraper()
     start = time.time()
+    consecutive_blocks = 0
 
     for i, (project_id, project_url) in enumerate(queue, 1):
         if time.time() - start > MAX_RUNTIME_SECONDS:
@@ -147,7 +171,18 @@ def main() -> None:
         if not project_url:
             continue
         logging.info("Scraping comments %d/%d: %s", i, len(queue), project_id)
-        scrape_project(conn, scraper, project_id, project_url)
+        ok = scrape_project(conn, scraper, project_id, project_url)
+        if not ok:
+            consecutive_blocks += 1
+            if consecutive_blocks >= MAX_CONSECUTIVE_BLOCKS:
+                logging.error(
+                    "Stopping: Cloudflare blocked %d projects in a row. "
+                    "Install curl_cffi on the compute node or retry later.",
+                    consecutive_blocks,
+                )
+                break
+        else:
+            consecutive_blocks = 0
 
     conn.close()
     logging.info("Comments SQLite scrape complete")

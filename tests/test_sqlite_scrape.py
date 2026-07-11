@@ -30,6 +30,10 @@ from processing.sqlite_schema import (  # noqa: E402
     upsert_project,
 )
 from scrapers.nav_counts import parse_nav_counts_from_html  # noqa: E402
+from scrapers.ks_session import (  # noqa: E402
+    is_cloudflare_challenge,
+    parse_csrf_from_html,
+)
 
 
 SAMPLE_HTML = """
@@ -44,6 +48,24 @@ SAMPLE_HTML = """
 </a>
 </body></html>
 """
+
+
+class TestKsSession(unittest.TestCase):
+    def test_is_cloudflare_challenge(self):
+        self.assertTrue(is_cloudflare_challenge("<html><title>Just a moment...</title></html>"))
+        self.assertFalse(
+            is_cloudflare_challenge(
+                '<html><meta name="csrf-token" content="abc123"></html>'
+            )
+        )
+
+    def test_parse_csrf_from_meta(self):
+        html = '<html><head><meta name="csrf-token" content="token-xyz"></head></html>'
+        self.assertEqual(parse_csrf_from_html(html), "token-xyz")
+
+    def test_parse_csrf_from_json_fallback(self):
+        html = '<script>window.bootstrap = {"csrfToken":"json-token"}</script>'
+        self.assertEqual(parse_csrf_from_html(html), "json-token")
 
 
 class TestNavCounts(unittest.TestCase):
@@ -256,6 +278,32 @@ class TestScrapeSqliteMock(unittest.TestCase):
             comments_sqlite.scrape_project(
                 conn, mock_scraper, "p1", "https://www.kickstarter.com/projects/a/b"
             )
+            count = conn.execute("SELECT COUNT(*) FROM comments WHERE project_id='p1'").fetchone()[0]
+            self.assertEqual(count, 1)
+            conn.close()
+
+    def test_scrape_project_keeps_comments_when_blocked(self):
+        import scrapers.scrape_comments_sqlite as comments_sqlite
+        from scrapers.ks_session import CloudflareBlockedError
+
+        mock_scraper = MagicMock()
+        mock_scraper.fetch_comments.side_effect = CloudflareBlockedError("blocked")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            conn = connect_db(db_path)
+            init_schema(conn)
+            upsert_project(conn, "p1", "https://www.kickstarter.com/projects/a/b")
+            insert_comment(
+                conn,
+                {"id": "c1", "project_id": "p1", "parent_id": None, "body": "keep me"},
+            )
+            conn.commit()
+
+            ok = comments_sqlite.scrape_project(
+                conn, mock_scraper, "p1", "https://www.kickstarter.com/projects/a/b"
+            )
+            self.assertFalse(ok)
             count = conn.execute("SELECT COUNT(*) FROM comments WHERE project_id='p1'").fetchone()[0]
             self.assertEqual(count, 1)
             conn.close()

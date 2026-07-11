@@ -14,7 +14,7 @@ set -e
 module purge
 curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="$HOME/.cargo/bin:$PATH"
-uv add cloudscraper pandas beautifulsoup4 requests
+uv add cloudscraper curl-cffi pandas beautifulsoup4 requests
 uv sync
 
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
