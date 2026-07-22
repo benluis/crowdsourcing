@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 COMMENTS_STATUSES = (
     "not_checked",
@@ -140,10 +140,43 @@ def init_schema(conn: sqlite3.Connection, source_globs: str = "") -> None:
             timestamp TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS kicktraq_metadata (
+            project_id TEXT PRIMARY KEY,
+            kicktraq_url TEXT,
+            kickstarter_url TEXT,
+            status TEXT,
+            backers INTEGER,
+            avg_daily_pledges REAL,
+            avg_pledge_per_backer REAL,
+            funding_current REAL,
+            funding_goal REAL,
+            funding_currency TEXT,
+            start_date TEXT,
+            end_date TEXT,
+            campaign_days INTEGER,
+            category TEXT,
+            creator_name TEXT,
+            fetched_at TEXT NOT NULL,
+            FOREIGN KEY (project_id) REFERENCES projects(project_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS kicktraq_charts (
+            project_id TEXT NOT NULL,
+            chart_type TEXT NOT NULL,
+            source_url TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            file_size INTEGER,
+            content_type TEXT,
+            fetched_at TEXT NOT NULL,
+            PRIMARY KEY (project_id, chart_type),
+            FOREIGN KEY (project_id) REFERENCES projects(project_id)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_comments_project_id ON comments(project_id);
         CREATE INDEX IF NOT EXISTS idx_updates_project_id ON updates(project_id);
         CREATE INDEX IF NOT EXISTS idx_projects_comments_status ON projects(comments_status);
         CREATE INDEX IF NOT EXISTS idx_projects_updates_status ON projects(updates_status);
+        CREATE INDEX IF NOT EXISTS idx_kicktraq_charts_project_id ON kicktraq_charts(project_id);
         """
     )
     now = utc_now_iso()
@@ -508,6 +541,109 @@ def log_scrape_event(
             utc_now_iso(),
         ),
     )
+
+
+def upsert_kicktraq_metadata(
+    conn: sqlite3.Connection,
+    project_id: str,
+    metadata: dict[str, Any],
+    *,
+    fetched_at: Optional[str] = None,
+) -> None:
+    now = fetched_at or utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO kicktraq_metadata (
+            project_id, kicktraq_url, kickstarter_url, status, backers,
+            avg_daily_pledges, avg_pledge_per_backer, funding_current,
+            funding_goal, funding_currency, start_date, end_date,
+            campaign_days, category, creator_name, fetched_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(project_id) DO UPDATE SET
+            kicktraq_url = excluded.kicktraq_url,
+            kickstarter_url = excluded.kickstarter_url,
+            status = excluded.status,
+            backers = excluded.backers,
+            avg_daily_pledges = excluded.avg_daily_pledges,
+            avg_pledge_per_backer = excluded.avg_pledge_per_backer,
+            funding_current = excluded.funding_current,
+            funding_goal = excluded.funding_goal,
+            funding_currency = excluded.funding_currency,
+            start_date = excluded.start_date,
+            end_date = excluded.end_date,
+            campaign_days = excluded.campaign_days,
+            category = excluded.category,
+            creator_name = excluded.creator_name,
+            fetched_at = excluded.fetched_at
+        """,
+        (
+            str(project_id),
+            metadata.get("kicktraq_url"),
+            metadata.get("kickstarter_url"),
+            metadata.get("status"),
+            metadata.get("backers"),
+            metadata.get("avg_daily_pledges"),
+            metadata.get("avg_pledge_per_backer"),
+            metadata.get("funding_current"),
+            metadata.get("funding_goal"),
+            metadata.get("funding_currency"),
+            metadata.get("start_date"),
+            metadata.get("end_date"),
+            metadata.get("campaign_days"),
+            metadata.get("category"),
+            metadata.get("creator_name"),
+            now,
+        ),
+    )
+
+
+def upsert_kicktraq_chart(
+    conn: sqlite3.Connection,
+    project_id: str,
+    chart_type: str,
+    *,
+    source_url: str,
+    file_path: str,
+    file_size: Optional[int] = None,
+    content_type: Optional[str] = None,
+    fetched_at: Optional[str] = None,
+) -> None:
+    now = fetched_at or utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO kicktraq_charts (
+            project_id, chart_type, source_url, file_path,
+            file_size, content_type, fetched_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(project_id, chart_type) DO UPDATE SET
+            source_url = excluded.source_url,
+            file_path = excluded.file_path,
+            file_size = excluded.file_size,
+            content_type = excluded.content_type,
+            fetched_at = excluded.fetched_at
+        """,
+        (
+            str(project_id),
+            chart_type,
+            source_url,
+            file_path,
+            file_size,
+            content_type,
+            now,
+        ),
+    )
+
+
+def kicktraq_charts_complete(conn: sqlite3.Connection, project_id: str) -> bool:
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS chart_count
+        FROM kicktraq_charts
+        WHERE project_id = ?
+        """,
+        (str(project_id),),
+    ).fetchone()
+    return bool(row and row["chart_count"] >= 3)
 
 
 def get_projects_needing_scrape(
