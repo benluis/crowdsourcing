@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 COMMENTS_STATUSES = (
     "not_checked",
@@ -172,11 +172,27 @@ def init_schema(conn: sqlite3.Connection, source_globs: str = "") -> None:
             FOREIGN KEY (project_id) REFERENCES projects(project_id)
         );
 
+        CREATE TABLE IF NOT EXISTS kicktraq_daily (
+            project_id TEXT NOT NULL,
+            calendar_date TEXT NOT NULL,
+            day_index INTEGER NOT NULL,
+            pledges REAL,
+            backers INTEGER,
+            comments INTEGER,
+            model TEXT,
+            extracted_at TEXT NOT NULL,
+            PRIMARY KEY (project_id, calendar_date),
+            FOREIGN KEY (project_id) REFERENCES projects(project_id)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_comments_project_id ON comments(project_id);
         CREATE INDEX IF NOT EXISTS idx_updates_project_id ON updates(project_id);
         CREATE INDEX IF NOT EXISTS idx_projects_comments_status ON projects(comments_status);
         CREATE INDEX IF NOT EXISTS idx_projects_updates_status ON projects(updates_status);
         CREATE INDEX IF NOT EXISTS idx_kicktraq_charts_project_id ON kicktraq_charts(project_id);
+        CREATE INDEX IF NOT EXISTS idx_kicktraq_daily_project_id ON kicktraq_daily(project_id);
+        CREATE INDEX IF NOT EXISTS idx_scrape_log_project_type
+            ON scrape_log(project_id, scrape_type, timestamp);
         """
     )
     now = utc_now_iso()
@@ -291,7 +307,9 @@ def insert_update(
             row.get("body"),
             row.get("author"),
             str(row.get("author_id")) if row.get("author_id") is not None else None,
-            str(row.get("published_at")) if row.get("published_at") is not None else None,
+            str(row.get("published_at"))
+            if row.get("published_at") is not None
+            else None,
             now,
             str(scraped_at),
         ),
@@ -324,7 +342,9 @@ def replace_comments_for_project(
                 row.get("author"),
                 str(row.get("author_id")) if row.get("author_id") is not None else None,
                 row.get("body"),
-                str(row.get("created_at")) if row.get("created_at") is not None else None,
+                str(row.get("created_at"))
+                if row.get("created_at") is not None
+                else None,
                 now,
                 str(row.get("scraped_at") or now),
             ),
@@ -365,7 +385,9 @@ def replace_updates_for_project(
                 row.get("body"),
                 row.get("author"),
                 str(row.get("author_id")) if row.get("author_id") is not None else None,
-                str(row.get("published_at")) if row.get("published_at") is not None else None,
+                str(row.get("published_at"))
+                if row.get("published_at") is not None
+                else None,
                 now,
                 str(row.get("scraped_at") or now),
             ),
@@ -374,7 +396,9 @@ def replace_updates_for_project(
     return inserted
 
 
-def refresh_scraped_counts(conn: sqlite3.Connection, project_id: Optional[str] = None) -> None:
+def refresh_scraped_counts(
+    conn: sqlite3.Connection, project_id: Optional[str] = None
+) -> None:
     now = utc_now_iso()
     if project_id:
         _refresh_one_project_counts(conn, str(project_id), now)
@@ -385,7 +409,9 @@ def refresh_scraped_counts(conn: sqlite3.Connection, project_id: Optional[str] =
     conn.commit()
 
 
-def _refresh_one_project_counts(conn: sqlite3.Connection, project_id: str, now: str) -> None:
+def _refresh_one_project_counts(
+    conn: sqlite3.Connection, project_id: str, now: str
+) -> None:
     total = conn.execute(
         "SELECT COUNT(*) FROM comments WHERE project_id = ?", (project_id,)
     ).fetchone()[0]
@@ -644,6 +670,89 @@ def kicktraq_charts_complete(conn: sqlite3.Connection, project_id: str) -> bool:
         (str(project_id),),
     ).fetchone()
     return bool(row and row["chart_count"] >= 3)
+
+
+def replace_kicktraq_daily_for_project(
+    conn: sqlite3.Connection,
+    project_id: str,
+    rows: list[dict[str, Any]],
+    *,
+    extracted_at: Optional[str] = None,
+) -> int:
+    now = extracted_at or utc_now_iso()
+    conn.execute("DELETE FROM kicktraq_daily WHERE project_id = ?", (str(project_id),))
+    inserted = 0
+    for row in rows:
+        conn.execute(
+            """
+            INSERT INTO kicktraq_daily (
+                project_id, calendar_date, day_index, pledges, backers,
+                comments, model, extracted_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(project_id),
+                row["calendar_date"],
+                int(row["day_index"]),
+                row.get("pledges"),
+                row.get("backers"),
+                row.get("comments"),
+                row.get("model"),
+                now,
+            ),
+        )
+        inserted += 1
+    return inserted
+
+
+def kicktraq_daily_complete(conn: sqlite3.Connection, project_id: str) -> bool:
+    row = conn.execute(
+        """
+        SELECT status
+        FROM scrape_log
+        WHERE project_id = ? AND scrape_type = 'kicktraq_daily' AND action = 'extract'
+        ORDER BY timestamp DESC
+        LIMIT 1
+        """,
+        (str(project_id),),
+    ).fetchone()
+    if not row or row["status"] != "complete":
+        return False
+    count_row = conn.execute(
+        "SELECT COUNT(*) AS row_count FROM kicktraq_daily WHERE project_id = ?",
+        (str(project_id),),
+    ).fetchone()
+    return bool(count_row and count_row["row_count"] > 0)
+
+
+def get_kicktraq_metadata(
+    conn: sqlite3.Connection, project_id: str
+) -> Optional[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM kicktraq_metadata WHERE project_id = ?",
+        (str(project_id),),
+    ).fetchone()
+
+
+def get_projects_with_kicktraq_charts(
+    conn: sqlite3.Connection,
+    *,
+    require_daily: bool = False,
+) -> list[sqlite3.Row]:
+    query = """
+        SELECT p.project_id, p.project_slug, m.start_date, m.end_date, m.campaign_days
+        FROM projects p
+        JOIN kicktraq_metadata m ON m.project_id = p.project_id
+        WHERE (
+            SELECT COUNT(*) FROM kicktraq_charts c WHERE c.project_id = p.project_id
+        ) >= 3
+    """
+    if require_daily:
+        query += " AND EXISTS (SELECT 1 FROM kicktraq_daily d WHERE d.project_id = p.project_id)"
+    else:
+        query += " AND NOT EXISTS (SELECT 1 FROM kicktraq_daily d WHERE d.project_id = p.project_id)"
+    query += " ORDER BY p.project_id"
+    return conn.execute(query).fetchall()
 
 
 def get_projects_needing_scrape(

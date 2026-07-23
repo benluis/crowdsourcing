@@ -18,10 +18,12 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pandas as pd
+from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from processing.sqlite_schema import (  # noqa: E402
+    checkpoint_db,
     connect_db,
     default_db_path,
     extract_slug,
@@ -39,7 +41,11 @@ from scrapers.kicktraq_parser import (  # noqa: E402
     kickstarter_to_kicktraq_url,
     parse_project_info_from_html,
 )
-from scrapers.ks_session import CloudflareBlockedError, create_kickstarter_session, fetch_page  # noqa: E402
+from scrapers.ks_session import (
+    CloudflareBlockedError,
+    create_kickstarter_session,
+    fetch_page,
+)  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,6 +56,7 @@ DEFAULT_INPUT_CSV = "data/my_file.csv"
 DEFAULT_CHARTS_DIR = "data/kicktraq/charts"
 DELAY_SECONDS = 2.5
 MIN_PNG_BYTES = 1024
+CHECKPOINT_EVERY = 100
 
 
 def resolve_url_column(df: pd.DataFrame) -> str | None:
@@ -102,7 +109,9 @@ class KicktraqChartScraper:
                     return None
                 content_type = response.headers.get("content-type", "")
                 if "image" not in content_type and not url.endswith(".png"):
-                    logging.error("Unexpected content-type %s for %s", content_type, url)
+                    logging.error(
+                        "Unexpected content-type %s for %s", content_type, url
+                    )
                     return None
                 data = response.content
                 if len(data) < MIN_PNG_BYTES:
@@ -194,7 +203,9 @@ def scrape_project(
         image_url = chart_image_url(kicktraq_url, chart_type)
         result = scraper.fetch_binary(image_url)
         if result is None:
-            logging.warning("Failed to download %s for project %s", chart_type, project_id)
+            logging.warning(
+                "Failed to download %s for project %s", chart_type, project_id
+            )
             continue
 
         data, content_type = result
@@ -210,7 +221,9 @@ def scrape_project(
             content_type=content_type,
         )
         downloaded += 1
-        logging.info("Saved %s (%d bytes) for project %s", file_path, len(data), project_id)
+        logging.info(
+            "Saved %s (%d bytes) for project %s", file_path, len(data), project_id
+        )
 
     success = downloaded == len(CHART_FILENAMES)
     log_scrape_event(
@@ -221,7 +234,9 @@ def scrape_project(
         rows_fetched=downloaded,
         expected_count=len(CHART_FILENAMES),
         status="complete" if success else "partial",
-        error_message="" if success else f"downloaded {downloaded}/{len(CHART_FILENAMES)} charts",
+        error_message=""
+        if success
+        else f"downloaded {downloaded}/{len(CHART_FILENAMES)} charts",
     )
     return success
 
@@ -235,11 +250,16 @@ def process_projects(
     *,
     force: bool = False,
     delay: float = DELAY_SECONDS,
+    checkpoint_every: int = CHECKPOINT_EVERY,
 ) -> tuple[int, int, int]:
     processed = 0
     skipped = 0
     failed = 0
-    for _, row in df.iterrows():
+    rows = [row for _, row in df.iterrows()]
+    for index, row in enumerate(
+        tqdm(rows, desc="Kicktraq download", unit="project"),
+        start=1,
+    ):
         project_id = str(row.get("id", "")).strip()
         project_url = str(row.get(url_col, "")).strip()
         if not project_id or not project_url:
@@ -261,16 +281,25 @@ def process_projects(
             processed += 1
         else:
             failed += 1
-        time.sleep(delay + random.uniform(0, 1))
+
+        if checkpoint_every > 0 and index % checkpoint_every == 0:
+            checkpoint_db(conn)
+
+        time.sleep(delay + random.uniform(0, delay * 0.25))
+    checkpoint_db(conn)
     return processed, skipped, failed
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Download Kicktraq daily chart images into SQLite")
+    parser = argparse.ArgumentParser(
+        description="Download Kicktraq daily chart images into SQLite"
+    )
     parser.add_argument("input_csv", nargs="?", default=DEFAULT_INPUT_CSV)
     parser.add_argument("--db", default=None)
     parser.add_argument("--charts-dir", default=DEFAULT_CHARTS_DIR)
-    parser.add_argument("--force", action="store_true", help="Re-download charts for all projects")
+    parser.add_argument(
+        "--force", action="store_true", help="Re-download charts for all projects"
+    )
     parser.add_argument("--delay", type=float, default=DELAY_SECONDS)
     args = parser.parse_args()
 
@@ -290,7 +319,9 @@ def main() -> None:
     if url_col is None:
         logging.error("No URL column found in %s", args.input_csv)
         sys.exit(1)
-    df = df[df[url_col].astype(str).str.contains("kickstarter.com", case=False, na=False)]
+    df = df[
+        df[url_col].astype(str).str.contains("kickstarter.com", case=False, na=False)
+    ]
     logging.info("Downloading Kicktraq charts for %d Kickstarter projects", len(df))
 
     scraper = KicktraqChartScraper()
