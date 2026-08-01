@@ -35,11 +35,19 @@ logging.basicConfig(
 class KickstarterCommentsScraper:
     CSRF_SOURCE_URL = "https://www.kickstarter.com"
 
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        request_delay: float = 6.0,
+        request_delay_jitter: float = 2.0,
+        reset_interval: int = 60,
+    ):
         self.scraper, self._http_backend = create_kickstarter_session()
         self.graph_url = "https://www.kickstarter.com/graph"
         self.requests_made = 0
-        self.reset_interval = 20  # Proactively reset session every 20 requests (Community Tip)
+        self.request_delay = request_delay
+        self.request_delay_jitter = request_delay_jitter
+        self.reset_interval = reset_interval
         self.current_project_url = None
 
     def reset_session(self):
@@ -92,6 +100,7 @@ class KickstarterCommentsScraper:
                 time.sleep(5)
 
             try:
+                time.sleep(self.request_delay + random.uniform(0, self.request_delay_jitter))
                 start_ts = time.time()
                 response = self.scraper.post(self.graph_url, json=payload)
                 latency = time.time() - start_ts
@@ -322,9 +331,8 @@ class KickstarterCommentsScraper:
             cursor = page_info['endCursor']
             
             logging.info(f"Fetched {len(edges)} top-level comments (Total items: {total_fetched})...")
-            
-            # Dynamic sleep: If we are fetching fast, sleep a bit more
-            time.sleep(random.uniform(2.0, 4.0))
+
+            time.sleep(self.request_delay + random.uniform(0, self.request_delay_jitter))
 
 def load_processed_ids(output_dir: str) -> set:
     """

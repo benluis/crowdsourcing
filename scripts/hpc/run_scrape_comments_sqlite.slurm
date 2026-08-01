@@ -21,16 +21,20 @@ cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 mkdir -p logs data/kickstarter
 
 INPUT_CSV=${1:-"data/my_file.csv"}
-DB_PATH=${2:-""}
+DB_PATH=${2:-"data/kickstarter/kickstarter_main.db"}
 STATUS=${3:-"partial,missing"}
+PROJECT_DELAY=${4:-12}
+REQUEST_DELAY=${5:-6}
+BLOCK_COOLDOWN=${6:-180}
 
 echo "--- Scrape comments into SQLite ---"
 echo "Date: $(date)"
+echo "DB: $DB_PATH"
+echo "Throttle: project_delay=${PROJECT_DELAY}s request_delay=${REQUEST_DELAY}s block_cooldown=${BLOCK_COOLDOWN}s"
 
-CMD=(uv run python src/scrapers/scrape_comments_sqlite.py "$INPUT_CSV" --status "$STATUS")
-if [ -n "$DB_PATH" ]; then
-  CMD+=(--db "$DB_PATH")
-fi
+CMD=(uv run python src/scrapers/scrape_comments_sqlite.py "$INPUT_CSV" --status "$STATUS"
+  --delay "$PROJECT_DELAY" --request-delay "$REQUEST_DELAY" --block-cooldown "$BLOCK_COOLDOWN"
+  --db "$DB_PATH")
 "${CMD[@]}"
 
 echo "--- Done: $(date) ---"

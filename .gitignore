@@ -32,6 +32,20 @@ data/dictionaries/*
 *.xlsx
 *.xls
 
+# --- Kickstarter scrape artifacts ---
+data/kickstarter/
+data/scraped/
+data/scraped_updates_only/
+data/analysis/
+*.db
+*.db-wal
+*.db-shm
+longleaf crowdsourcing/data/
+longleaf crowdsourcing/logs/
+longleaf crowdsourcing/*.out
+longleaf crowdsourcing/*.err
+longleaf crowdsourcing/analyze_*.py
+
 # --- Models ---
 models/
 *.pt

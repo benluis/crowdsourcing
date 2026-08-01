@@ -19,8 +19,8 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from processing.sqlite_schema import (  # noqa: E402
+    CANONICAL_DB_PATH,
     connect_db,
-    default_db_path,
     init_schema,
     refresh_completeness_status,
     refresh_scraped_counts,
@@ -40,7 +40,7 @@ def main() -> None:
     parser.add_argument("--output-dir", default=REPORT_DIR)
     args = parser.parse_args()
 
-    db_path = Path(args.db) if args.db else default_db_path()
+    db_path = Path(args.db) if args.db else CANONICAL_DB_PATH
     conn = connect_db(db_path)
     init_schema(conn)
 

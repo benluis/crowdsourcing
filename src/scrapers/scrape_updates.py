@@ -35,14 +35,13 @@ logging.basicConfig(
 class KickstarterUpdatesScraper:
     CSRF_SOURCE_URL = "https://www.kickstarter.com"
 
-    def __init__(self):
+    def __init__(self, *, request_delay: float = 6.0):
         self.scraper, self._http_backend = create_kickstarter_session()
         self.graph_url = "https://www.kickstarter.com/graph"
         self.requests_made = 0
-        self.reset_interval = 100  # Increased from 20 to reduce session churn
+        self.reset_interval = 100
         self.current_project_url = None
-        # 17 requests per minute = 60/17 ≈ 3.53 seconds per request
-        self.current_delay = 3.6
+        self.current_delay = request_delay
 
     def reset_session(self):
         logging.info("Resetting scraper session (clearing cookies)...")

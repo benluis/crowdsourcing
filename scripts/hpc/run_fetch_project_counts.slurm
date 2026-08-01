@@ -21,22 +21,20 @@ cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 mkdir -p logs data/kickstarter
 
 INPUT_CSV=${1:-"data/my_file.csv"}
-DB_PATH=${2:-""}
+DB_PATH=${2:-"data/kickstarter/kickstarter_main.db"}
 EXTRA_ARGS=${3:-""}
 
 echo "--- Fetch Kickstarter nav counts ---"
 echo "Date: $(date)"
+echo "DB: $DB_PATH"
 
-CMD=(uv run python src/scrapers/fetch_project_counts.py "$INPUT_CSV")
-if [ -n "$DB_PATH" ]; then
-  CMD+=(--db "$DB_PATH")
-fi
+CMD=(uv run python src/scrapers/fetch_project_counts.py "$INPUT_CSV" --db "$DB_PATH")
 if [ -n "$EXTRA_ARGS" ]; then
   # shellcheck disable=SC2206
   CMD+=($EXTRA_ARGS)
 fi
 "${CMD[@]}"
 
-uv run python src/processing/audit_completeness.py ${DB_PATH:+--db "$DB_PATH"}
+uv run python src/processing/audit_completeness.py --db "$DB_PATH"
 
 echo "--- Done: $(date) ---"

@@ -34,6 +34,9 @@ def default_db_path(base_dir: str | Path = "data/kickstarter") -> Path:
     return base / f"kickstarter_{date_str}.db"
 
 
+CANONICAL_DB_PATH = Path("data/kickstarter/kickstarter_main.db")
+
+
 def extract_slug(url: str) -> str:
     if not url:
         return ""

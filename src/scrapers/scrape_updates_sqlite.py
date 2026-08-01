@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import random
 import sys
 import time
 from pathlib import Path
@@ -41,7 +42,10 @@ logging.basicConfig(
 
 DEFAULT_INPUT_CSV = "data/my_file.csv"
 MAX_RUNTIME_SECONDS = 9.8 * 24 * 3600
-MAX_CONSECUTIVE_BLOCKS = 3
+MAX_CONSECUTIVE_BLOCKS = 5
+DEFAULT_PROJECT_DELAY = 12.0
+DEFAULT_REQUEST_DELAY = 6.0
+DEFAULT_BLOCK_COOLDOWN = 180.0
 
 
 def resolve_url_column(df: pd.DataFrame) -> str | None:
@@ -136,6 +140,24 @@ def main() -> None:
         help="Comma-separated updates_status values to rescrape",
     )
     parser.add_argument("--all", action="store_true", help="Scrape all projects from input CSV")
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=DEFAULT_PROJECT_DELAY,
+        help="Seconds to wait between projects (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--request-delay",
+        type=float,
+        default=DEFAULT_REQUEST_DELAY,
+        help="Seconds between GraphQL requests within a project (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--block-cooldown",
+        type=float,
+        default=DEFAULT_BLOCK_COOLDOWN,
+        help="Seconds to wait after a Cloudflare block before continuing (default: %(default)s)",
+    )
     args = parser.parse_args()
 
     db_path = Path(args.db) if args.db else default_db_path()
@@ -160,7 +182,13 @@ def main() -> None:
         queue = [(r["project_id"], r["project_url"]) for r in rows]
 
     logging.info("Updates scrape queue: %d projects", len(queue))
-    scraper = KickstarterUpdatesScraper()
+    logging.info(
+        "Throttle: project_delay=%.1fs request_delay=%.1fs block_cooldown=%.0fs",
+        args.delay,
+        args.request_delay,
+        args.block_cooldown,
+    )
+    scraper = KickstarterUpdatesScraper(request_delay=args.request_delay)
     start = time.time()
     consecutive_blocks = 0
 
@@ -174,15 +202,24 @@ def main() -> None:
         ok = scrape_project(conn, scraper, project_id, project_url)
         if not ok:
             consecutive_blocks += 1
+            scraper.reset_session()
+            logging.warning(
+                "Cloudflare cooldown: sleeping %.0fs before next project (%d consecutive blocks)",
+                args.block_cooldown,
+                consecutive_blocks,
+            )
+            time.sleep(args.block_cooldown)
             if consecutive_blocks >= MAX_CONSECUTIVE_BLOCKS:
                 logging.error(
                     "Stopping: Cloudflare blocked %d projects in a row. "
-                    "Install curl_cffi on the compute node or retry later.",
+                    "Re-run later with a higher --delay (e.g. 20).",
                     consecutive_blocks,
                 )
                 break
         else:
             consecutive_blocks = 0
+            if args.delay > 0:
+                time.sleep(args.delay + random.uniform(0, args.delay * 0.25))
 
     conn.close()
     logging.info("Updates SQLite scrape complete")

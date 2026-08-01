@@ -93,7 +93,7 @@ def fetch_page(
     url: str,
     *,
     max_attempts: int = 5,
-    base_delay: float = 5.0,
+    base_delay: float = 8.0,
 ) -> Any:
     """GET with Cloudflare-aware retries. Raises CloudflareBlockedError if still blocked."""
     saw_cloudflare = False
